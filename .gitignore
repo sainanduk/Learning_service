@@ -1,0 +1,46 @@
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.db
+*.sqlite3
+
+# Django
+*.log
+*.pot
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+db.sqlite3
+*.sqlite3
+
+# Environment Variables
+.env
+
+# Virtual Environment
+venv/
+.env/
+*.env
+
+# Local IDE Files
+.vscode/
+.idea/
+
+# Coverage Reports
+.coverage
+coverage.xml
+*.cover
+
+# PyCharm
+.idea/
+
+# Windows Installer files
+Thumbs.db
+
+# Mac OS X Finder files
+.DS_Store
+
+# Caches
+*.log
