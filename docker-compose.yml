@@ -1,0 +1,43 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:14
+    restart: always
+    environment:
+      POSTGRES_DB: assessments_db
+      POSTGRES_USER: username
+      POSTGRES_PASSWORD: yourpassword
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U username -d assessments_db"]
+      interval: 30s
+      retries: 3
+      timeout: 20s
+      start_period: 10s
+  web:
+    build: .
+    command: >
+      sh -c "
+             python manage.py makemigrations --noinput &&
+             python manage.py migrate --noinput &&
+             DJANGO_SUPERUSER_PASSWORD=adminpassword python manage.py createsuperuser --noinput --username admin --email admin@example.com &&
+             python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DEBUG: "True"
+      DB_NAME: assessments_db
+      DB_USER: username
+      DB_PASSWORD: yourpassword
+      DB_HOST: db
+      DB_PORT: 5432
+volumes:
+  postgres_data:
