@@ -33,8 +33,8 @@ class AssignmentAdmin(admin.ModelAdmin):
     search_fields = ('name',)
 
 class AssignmentAttemptAdmin(admin.ModelAdmin):
-    list_display = ('get_student_username', 'get_assignment_name', 'attempt_number', 'status', 'last_attempted')
-    search_fields = ('student__username', 'assignment__name', 'attempt_number', 'status')
+    list_display = ('user_id', 'get_assignment_name', 'status', 'attempted_at', 'score')
+    search_fields = ( 'assignment__name',  'status')
     list_filter = ('status',)
 
     def get_student_username(self, obj):
