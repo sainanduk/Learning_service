@@ -23,7 +23,7 @@ services:
       sh -c "
              python manage.py makemigrations --noinput &&
              python manage.py migrate --noinput &&
-             DJANGO_SUPERUSER_PASSWORD=adminpassword python manage.py createsuperuser --noinput --username admin --email admin@example.com &&
+             
              python manage.py runserver 0.0.0.0:8000"
     volumes:
       - .:/code
