@@ -1,10 +1,81 @@
 # learning/views.py
 
-from django.http import JsonResponse
-from django.db import transaction
+from uuid import UUID
+from django.http import JsonResponse, Http404
 from django.shortcuts import get_object_or_404
+from django.utils.timezone import now
 
 from .models import LearningPath, Module, Lecture, Assignment, Assessment, LectureProgress, ModuleProgress, LearningPathProgress, AssignmentAttempt, AssessmentAttempt
+
+from django.utils import timezone
+# from .models import Lecture, LectureProgress, ModuleProgress, LearningPathProgress
+
+def update_learning_path_progress(request, user, lecture_id):
+
+    try:
+        lecture_uuid = UUID(str(lecture_id))
+    except ValueError:
+        raise Http404("Invalid lecture ID format.")
+    # Retrieve the lecture
+    lecture = get_object_or_404(Lecture, lecture_id=lecture_id)
+    module = lecture.module
+    learning_path = module.learning_path
+
+    # Update or create LectureProgress
+    lecture_progress, created = LectureProgress.objects.get_or_create(
+        user_id=str(user),
+        lecture=lecture,
+        defaults={'is_viewed': True, 'completed_at': timezone.now()}
+    )
+    if not created:
+        lecture_progress.is_viewed = True
+        lecture_progress.completed_at = timezone.now()
+        lecture_progress.save()
+
+    # Calculate ModuleProgress
+    lectures = module.lectures.all()
+    total_lectures = lectures.count()
+    viewed_lectures = LectureProgress.objects.filter(
+        user_id=str(user),
+        lecture__in=lectures,
+        is_viewed=True
+    ).count()
+    module_progress_value = (viewed_lectures / total_lectures) * 100 if total_lectures > 0 else 0
+    is_module_completed = module_progress_value == 100
+
+    # Update or create ModuleProgress
+    module_progress, _ = ModuleProgress.objects.update_or_create(
+        user_id=str(user),
+        module=module,
+        defaults={'progress': module_progress_value, 'is_completed': is_module_completed}
+    )
+
+    # Calculate LearningPathProgress
+    modules = learning_path.modules.all()
+    total_modules = modules.count()
+    total_progress = 0
+    for mod in modules:
+        mod_lectures = mod.lectures.all()
+        mod_total_lectures = mod_lectures.count()
+        mod_viewed_lectures = LectureProgress.objects.filter(
+            user_id=str(user),
+            lecture__in=mod_lectures,
+            is_viewed=True
+        ).count()
+        mod_progress = (mod_viewed_lectures / mod_total_lectures) * 100 if mod_total_lectures > 0 else 0
+        total_progress += mod_progress
+    learning_path_progress_value = total_progress / total_modules if total_modules > 0 else 0
+
+    # Update or create LearningPathProgress
+    learning_path_progress, _ = LearningPathProgress.objects.update_or_create(
+        user_id=str(user),
+        learning_path=learning_path,
+        defaults={'progress': learning_path_progress_value}
+    )
+
+    return JsonResponse({'status': 'success'})
+
+
 
 def learning_paths_list(request, institute, user):
     learning_paths = LearningPath.objects.filter(institution=institute)

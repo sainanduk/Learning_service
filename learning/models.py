@@ -13,7 +13,7 @@ class LearningPath(models.Model):
     institution = models.CharField(max_length=100, default='parul')
     title = models.CharField(max_length=100)
     level = models.CharField(max_length=50)
-    time = models.CharField(max_length=50)  # e.g., "15 -20 days"
+    time = models.CharField(max_length=50)  
     thumbnail = models.URLField()
     is_published = models.BooleanField(default=False)
     description = models.TextField(blank=True)
@@ -68,9 +68,9 @@ class Assessment(models.Model):
     # Proctoring options
     is_fullscreen = models.BooleanField(default=False)
     shuffle = models.BooleanField(default=False)
-    voice_monitoring = models.CharField(max_length=50, default='none')  # e.g., easy, strict
-    face_proctoring = models.CharField(max_length=50, default='none')
-    electronic_monitoring = models.CharField(max_length=50, default='none')
+    voice_monitoring = models.BooleanField(default=False)  # e.g., easy, strict
+    face_proctoring = models.BooleanField(default=False)
+    electronic_monitoring = models.BooleanField(default=False)
 
     def __str__(self):
         return self.name

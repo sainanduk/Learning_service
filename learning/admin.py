@@ -14,22 +14,22 @@ class AssignmentInline(admin.StackedInline):
     extra = 0
 
 class LearningPathAdmin(admin.ModelAdmin):
-    list_display = ('title', 'level', 'time', 'is_published', 'institution')
+    list_display = ('id','title', 'level', 'time', 'is_published', 'institution')
     search_fields = ('title', 'level', 'institution')
     list_filter = ('is_published',)
     inlines = [ModuleInline]
 
 class ModuleAdmin(admin.ModelAdmin):
-    list_display = ('title', 'learning_path')
+    list_display = ('module_id','title', 'learning_path')
     search_fields = ('title',)
     inlines = [LectureInline, AssignmentInline]
 
 class LectureAdmin(admin.ModelAdmin):
-    list_display = ('title', 'module')
+    list_display = ('lecture_id','title', 'module')
     search_fields = ('title',)
 
 class AssignmentAdmin(admin.ModelAdmin):
-    list_display = ('name', 'module', 'total_marks', 'attempts_count', 'total_questions' )
+    list_display = ('id', 'name', 'module', 'total_marks', 'attempts_count', 'total_questions' )
     search_fields = ('name',)
 
 class AssignmentAttemptAdmin(admin.ModelAdmin):
