@@ -10,7 +10,6 @@ import uuid
 
 class LearningPath(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    institution = models.CharField(max_length=100, default='parul')
     title = models.CharField(max_length=100)
     level = models.CharField(max_length=50)
     time = models.CharField(max_length=50)  
@@ -20,6 +19,13 @@ class LearningPath(models.Model):
 
     def __str__(self):
         return self.title
+
+class InstituteBatchLearningPath(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.CharField(max_length=100, default='parul')
+    learning_path = models.ForeignKey(LearningPath, on_delete=models.CASCADE)
+    batch = models.CharField(max_length=50)
+    
 
 class Module(models.Model):
     module_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

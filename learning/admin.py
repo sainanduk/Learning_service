@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import LearningPath, Module, Lecture, Assignment, Assessment, AssignmentAttempt, LectureProgress, ModuleProgress, LearningPathProgress, AssessmentAttempt
+from .models import LearningPath, Module, Lecture, Assignment, Assessment, AssignmentAttempt, LectureProgress, ModuleProgress, LearningPathProgress, AssessmentAttempt, InstituteBatchLearningPath
 
 class ModuleInline(admin.TabularInline):
     model = Module
@@ -14,10 +14,15 @@ class AssignmentInline(admin.StackedInline):
     extra = 0
 
 class LearningPathAdmin(admin.ModelAdmin):
-    list_display = ('id','title', 'level', 'time', 'is_published', 'institution')
-    search_fields = ('title', 'level', 'institution')
+    list_display = ('id','title', 'level', 'time', 'is_published')
+    search_fields = ('title', 'level')
     list_filter = ('is_published',)
     inlines = [ModuleInline]
+
+class InstituteBatchLearningPathAdmin(admin.ModelAdmin):
+    list_display = ('id', 'institution', 'learning_path', 'batch')
+    search_fields = ('institution', 'batch')
+    readonly_fields = ('id',)
 
 class ModuleAdmin(admin.ModelAdmin):
     list_display = ('module_id','title', 'learning_path')
@@ -100,3 +105,4 @@ admin.site.register(Lecture, LectureAdmin)
 admin.site.register(Assignment, AssignmentAdmin)
 admin.site.register(AssignmentAttempt, AssignmentAttemptAdmin)
 admin.site.register(AssessmentAttempt, AssessmentAttemptAdmin)
+admin.site.register(InstituteBatchLearningPath, InstituteBatchLearningPathAdmin)

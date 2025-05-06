@@ -4,18 +4,138 @@ from uuid import UUID
 from django.http import JsonResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
+from django.db.models import Q
+from django.views.decorators.csrf import csrf_exempt
 
-from .models import LearningPath, Module, Lecture, Assignment, Assessment, LectureProgress, ModuleProgress, LearningPathProgress, AssignmentAttempt, AssessmentAttempt
+from .models import (
+    LearningPath, Module, Lecture, Assignment, Assessment, 
+    LectureProgress, ModuleProgress, LearningPathProgress, 
+    AssignmentAttempt, AssessmentAttempt, InstituteBatchLearningPath
+)
 
 from django.utils import timezone
-# from .models import Lecture, LectureProgress, ModuleProgress, LearningPathProgress
+
+def vendor_learning_paths_list(request):
+    """
+    View to list all learning paths for vendors to manage.
+    This allows vendors to see all learning paths regardless of institute or batch assignments.
+    """
+    try:
+        # Get all learning paths
+        learning_paths = LearningPath.objects.all()
+        
+        if not learning_paths.exists():
+            return JsonResponse({
+                'message': 'No learning paths found in the system'
+            }, status=404)
+        
+        # For each learning path, get all institute-batch mappings
+        result = []
+        for lp in learning_paths:            
+            
+            # Add to result
+            result.append({
+                'id': str(lp.id),
+                'title': lp.title,
+                'level': lp.level,
+                'time': lp.time,
+                'thumbnail': lp.thumbnail,
+                'is_published': lp.is_published,
+                'description': lp.description
+            })
+        
+        return JsonResponse({
+            'learning_paths': result,
+            'total': len(result)
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
+
+@csrf_exempt
+def vendor_add_learning_path_toInstitute(request, institute, learning_path_id, batch):
+    """
+    View to add or remove a learning path to/from an institute-batch combination.
+    
+    If the request method is POST:
+        - Creates association between learning path and institute-batch
+    If the request method is DELETE:
+        - Removes the association
+    """
+    try:
+        # Validate the learning path exists
+        learning_path = get_object_or_404(LearningPath, pk=learning_path_id)
+        
+        # Handle POST request (create association)
+        if request.method == 'POST':
+            # Check if this mapping already exists
+            existing_mapping = InstituteBatchLearningPath.objects.filter(
+                institution=institute,
+                learning_path=learning_path,
+                batch=batch
+            ).first()
+            
+            if existing_mapping:
+                return JsonResponse({
+                    'message': f'This learning path is already assigned to institute "{institute}" and batch "{batch}"'
+                }, status=400)
+            
+            # Create new mapping
+            mapping = InstituteBatchLearningPath.objects.create(
+                institution=institute,
+                learning_path=learning_path,
+                batch=batch
+            )
+            
+            return JsonResponse({
+                'message': f'Successfully assigned learning path "{learning_path.title}" to institute "{institute}" and batch "{batch}"',
+                'mapping_id': str(mapping.id)
+            }, status=201)
+            
+        # Handle DELETE request (remove association)
+        elif request.method == 'DELETE':
+            # Find and delete mapping
+            mapping = InstituteBatchLearningPath.objects.filter(
+                institution=institute,
+                learning_path=learning_path,
+                batch=batch
+            ).first()
+            
+            if not mapping:
+                return JsonResponse({
+                    'error': f'No mapping found for learning path "{learning_path.title}" with institute "{institute}" and batch "{batch}"'
+                }, status=404)
+            
+            # Delete the mapping
+            mapping.delete()
+            
+            return JsonResponse({
+                'message': f'Successfully removed learning path "{learning_path.title}" from institute "{institute}" and batch "{batch}"'
+            })
+            
+        # Handle other HTTP methods
+        else:
+            return JsonResponse({
+                'error': f'Method {request.method} not allowed. Use POST to create or DELETE to remove mapping.'
+            }, status=405)
+            
+    except Http404:
+        return JsonResponse({
+            'error': f'Learning path with ID {learning_path_id} not found'
+        }, status=404)
+    except Exception as e:
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
 
 def update_learning_path_progress(request, user, lecture_id):
-
     try:
         lecture_uuid = UUID(str(lecture_id))
     except ValueError:
         raise Http404("Invalid lecture ID format.")
+    
     # Retrieve the lecture
     lecture = get_object_or_404(Lecture, lecture_id=lecture_id)
     module = lecture.module
@@ -76,16 +196,173 @@ def update_learning_path_progress(request, user, lecture_id):
     return JsonResponse({'status': 'success'})
 
 
+def learning_paths_list(request, institute, batch, user):
+    try:
+        # Get learning paths for this institute and batch
+        institute_batch_mappings = InstituteBatchLearningPath.objects.filter(
+            institution=institute,
+            batch=batch
+        )
+        
+        if not institute_batch_mappings.exists():
+            return JsonResponse({
+                'error': f'No learning paths found for institute "{institute}" and batch "{batch}"'
+            }, status=404)
+            
+        # Extract learning path IDs
+        learning_path_ids = institute_batch_mappings.values_list('learning_path_id', flat=True)
+        
+        # Get the actual learning paths
+        learning_paths = LearningPath.objects.filter(id__in=learning_path_ids)
+        
+        if not learning_paths.exists():
+            return JsonResponse({
+                'error': 'No active learning paths found for this institute and batch'
+            }, status=404)
+            
+        # Get progress for these learning paths
+        progress_map = {
+            lp_progress.learning_path_id: lp_progress.progress
+            for lp_progress in LearningPathProgress.objects.filter(
+                user_id=str(user), 
+                learning_path__in=learning_paths
+            )
+        }
 
-def learning_paths_list(request, institute, user):
-    learning_paths = LearningPath.objects.filter(institution=institute)
-    progress_map = {
-        lp_progress.learning_path_id: lp_progress.progress
-        for lp_progress in LearningPathProgress.objects.filter(user_id=str(user), learning_path__in=learning_paths)
-    }
+        data = [
+            {
+                "id": str(lp.id),
+                "title": lp.title,
+                "level": lp.level,
+                "time": lp.time,
+                "thumbnail": lp.thumbnail,
+                "is_published": lp.is_published,
+                "description": lp.description,
+                "progress": progress_map.get(lp.id, 0.0),
+            }
+            for lp in learning_paths
+        ]
+        return JsonResponse(data, safe=False)
+        
+    except Exception as e:
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
 
-    data = [
-        {
+
+def learning_path_detail(request, id, user):
+    try:
+        # Get the learning path
+        lp = get_object_or_404(LearningPath, pk=id)
+
+        # Preload related objects
+        modules = lp.modules.prefetch_related('lectures', 'assignment')
+        lectures = Lecture.objects.filter(module__in=modules)
+        assignments = Assignment.objects.filter(module__in=modules)
+        assessments = Assessment.objects.filter(learning_path=lp)
+
+        # Ensure LearningPathProgress exists
+        lp_progress, _ = LearningPathProgress.objects.get_or_create(
+            user_id=str(user),
+            learning_path=lp,
+            defaults={'progress': 0.0}
+        )
+
+        # Ensure ModuleProgress exists for each module
+        module_progress_map = {}
+        for module in modules:
+            mp, _ = ModuleProgress.objects.get_or_create(
+                user_id=str(user),
+                module=module,
+                defaults={'progress': 0.0, 'is_completed': False}
+            )
+            module_progress_map[module.module_id] = mp
+
+        # Ensure LectureProgress exists for each lecture
+        lecture_progress_map = {}
+        for lecture in lectures:
+            lp_obj, _ = LectureProgress.objects.get_or_create(
+                user_id=str(user),
+                lecture=lecture,
+                defaults={'is_viewed': False, 'completed_at': None}
+            )
+            lecture_progress_map[lecture.lecture_id] = lp_obj
+
+        # Ensure AssignmentAttempt exists for each assignment
+        assignment_attempts_map = {}
+        for assignment in assignments:
+            aa, _ = AssignmentAttempt.objects.get_or_create(
+                user_id=str(user),
+                assignment=assignment,
+                defaults={'status': 'not_started', 'score': None}
+            )
+            assignment_attempts_map[assignment.id] = aa
+
+        # Ensure AssessmentAttempt exists for the assessment
+        assessment_attempt = None
+        if assessments.exists():
+            assessment = assessments.first()
+            assessment_attempt, _ = AssessmentAttempt.objects.get_or_create(
+                user_id=str(user),
+                assessment=assessment,
+                attempt_number=1,
+                defaults={'status': 'not_attempted', 'score': None}
+            )
+
+        # User-specific progress
+        lecture_progress_map = {
+            lp.lecture_id: lp for lp in LectureProgress.objects.filter(user_id=str(user), lecture__in=lectures)
+        }
+        module_progress_map = {
+            mp.module_id: mp for mp in ModuleProgress.objects.filter(user_id=str(user), module__in=modules)
+        }
+        lp_progress = LearningPathProgress.objects.filter(user_id=str(user), learning_path=lp).first()
+        assignment_attempts_map = {
+            aa.assignment_id: aa for aa in AssignmentAttempt.objects.filter(user_id=str(user), assignment__in=assignments)
+        }
+        assessment_attempt = AssessmentAttempt.objects.filter(user_id=str(user), assessment__in=assessments).order_by('-attempt_number').first()
+
+        module_data = []
+        for module in modules:
+            lecture_data = []
+            for lec in module.lectures.all():
+                progress = lecture_progress_map.get(lec.lecture_id)
+                lecture_data.append({
+                    "lecture_id": str(lec.lecture_id),
+                    "title": lec.title,
+                    "content": lec.content,
+                    "is_viewed": progress.is_viewed if progress else False,
+                    "completed_at": progress.completed_at if progress else None,
+                })
+
+            mod_prog = module_progress_map.get(module.module_id)
+            mod_obj = {
+                "module_id": str(module.module_id),
+                "title": module.title,
+                "description": module.description,
+                "progress": mod_prog.progress if mod_prog else 0.0,
+                "is_completed": mod_prog.is_completed if mod_prog else False,
+                "lectures": lecture_data
+            }
+
+            if hasattr(module, 'assignment'):
+                assignment = module.assignment
+                attempt = assignment_attempts_map.get(assignment.id)
+                mod_obj["assignment"] = {
+                    "id": str(assignment.id),
+                    "name": assignment.name,
+                    "description": assignment.description,
+                    "total_marks": assignment.total_marks,
+                    "total_questions": assignment.total_questions,
+                    "attempts": assignment.attempts_count,
+                    "status": attempt.status if attempt else 'not_started',
+                    "score": attempt.score if attempt else None,
+                    "attempted_at": attempt.attempted_at if attempt else None,
+                }
+
+            module_data.append(mod_obj)
+
+        response = {
             "id": str(lp.id),
             "title": lp.title,
             "level": lp.level,
@@ -93,159 +370,39 @@ def learning_paths_list(request, institute, user):
             "thumbnail": lp.thumbnail,
             "is_published": lp.is_published,
             "description": lp.description,
-            "progress": progress_map.get(lp.id, 0.0),
-        }
-        for lp in learning_paths
-    ]
-    return JsonResponse(data, safe=False)
-
-
-def learning_path_detail(request, id, user):
-    lp = get_object_or_404(LearningPath, pk=id)
-
-    # Preload related objects
-    modules = lp.modules.prefetch_related('lectures', 'assignment')
-    lectures = Lecture.objects.filter(module__in=modules)
-    assignments = Assignment.objects.filter(module__in=modules)
-    assessments = Assessment.objects.filter(learning_path=lp)
-
-    # Ensure LearningPathProgress exists
-    lp_progress, _ = LearningPathProgress.objects.get_or_create(
-        user_id=str(user),
-        learning_path=lp,
-        defaults={'progress': 0.0}
-    )
-
-    # Ensure ModuleProgress exists for each module
-    module_progress_map = {}
-    for module in modules:
-        mp, _ = ModuleProgress.objects.get_or_create(
-            user_id=str(user),
-            module=module,
-            defaults={'progress': 0.0, 'is_completed': False}
-        )
-        module_progress_map[module.module_id] = mp
-
-    # Ensure LectureProgress exists for each lecture
-    lecture_progress_map = {}
-    for lecture in lectures:
-        lp_obj, _ = LectureProgress.objects.get_or_create(
-            user_id=str(user),
-            lecture=lecture,
-            defaults={'is_viewed': False, 'completed_at': None}
-        )
-        lecture_progress_map[lecture.lecture_id] = lp_obj
-
-    # Ensure AssignmentAttempt exists for each assignment
-    assignment_attempts_map = {}
-    for assignment in assignments:
-        aa, _ = AssignmentAttempt.objects.get_or_create(
-            user_id=str(user),
-            assignment=assignment,
-            defaults={'status': 'not_started', 'score': None}
-        )
-        assignment_attempts_map[assignment.id] = aa
-
-    # Ensure AssessmentAttempt exists for the assessment
-    assessment_attempt = None
-    if assessments.exists():
-        assessment = assessments.first()
-        assessment_attempt, _ = AssessmentAttempt.objects.get_or_create(
-            user_id=str(user),
-            assessment=assessment,
-            attempt_number=1,
-            defaults={'status': 'not_attempted', 'score': None}
-        )
-
-    # User-specific progress
-    lecture_progress_map = {
-        lp.lecture_id: lp for lp in LectureProgress.objects.filter(user_id=str(user), lecture__in=lectures)
-    }
-    module_progress_map = {
-        mp.module_id: mp for mp in ModuleProgress.objects.filter(user_id=str(user), module__in=modules)
-    }
-    lp_progress = LearningPathProgress.objects.filter(user_id=str(user), learning_path=lp).first()
-    assignment_attempts_map = {
-        aa.assignment_id: aa for aa in AssignmentAttempt.objects.filter(user_id=str(user), assignment__in=assignments)
-    }
-    assessment_attempt = AssessmentAttempt.objects.filter(user_id=str(user), assessment__in=assessments).order_by('-attempt_number').first()
-
-    module_data = []
-    for module in modules:
-        lecture_data = []
-        for lec in module.lectures.all():
-            progress = lecture_progress_map.get(lec.lecture_id)
-            lecture_data.append({
-                "lecture_id": str(lec.lecture_id),
-                "title": lec.title,
-                "content": lec.content,
-                "is_viewed": progress.is_viewed if progress else False,
-                "completed_at": progress.completed_at if progress else None,
-            })
-
-        mod_prog = module_progress_map.get(module.module_id)
-        mod_obj = {
-            "module_id": str(module.module_id),
-            "title": module.title,
-            "description": module.description,
-            "progress": mod_prog.progress if mod_prog else 0.0,
-            "is_completed": mod_prog.is_completed if mod_prog else False,
-            "lectures": lecture_data
+            "progress": lp_progress.progress if lp_progress else 0.0,
+            "updated_at": lp_progress.updated_at if lp_progress else None,
+            "modules": module_data
         }
 
-        if hasattr(module, 'assignment'):
-            assignment = module.assignment
-            attempt = assignment_attempts_map.get(assignment.id)
-            mod_obj["assignment"] = {
-                "id": str(assignment.id),
-                "name": assignment.name,
-                "description": assignment.description,
-                "total_marks": assignment.total_marks,
-                "total_questions": assignment.total_questions,
-                "attempts": assignment.attempts_count,
-                "status": attempt.status if attempt else 'not_started',
-                "score": attempt.score if attempt else None,
-                "attempted_at": attempt.attempted_at if attempt else None,
+        if hasattr(lp, 'assessment'):
+            assessment = lp.assessment
+            response["assessment"] = {
+                "id": assessment.id,
+                "name": assessment.name,
+                "description": assessment.description,
+                "total_marks": assessment.total_marks,
+                "total_questions": assessment.total_questions,
+                "total_duration": assessment.total_duration,
+                "total_qualifying_percentage": assessment.total_qualifying_percentage,
+                "exam_type": assessment.exam_type,
+                "password_exists": assessment.password_exists,
+                "tab_switches_allowed": assessment.tab_switches_allowed,
+                "no_of_tab_switches": assessment.no_of_tab_switches,
+                "is_fullscreen": assessment.is_fullscreen,
+                "shuffle": assessment.shuffle,
+                "voice_monitoring": assessment.voice_monitoring,
+                "face_proctoring": assessment.face_proctoring,
+                "electronic_monitoring": assessment.electronic_monitoring,
+                "attempt_number": assessment_attempt.attempt_number if assessment_attempt else 0,
+                "score": assessment_attempt.score if assessment_attempt else None,
+                "status": assessment_attempt.status if assessment_attempt else 'not_attempted',
+                "attempted_at": assessment_attempt.attempted_at if assessment_attempt else None,
             }
 
-        module_data.append(mod_obj)
-
-    response = {
-        "id": str(lp.id),
-        "title": lp.title,
-        "level": lp.level,
-        "time": lp.time,
-        "thumbnail": lp.thumbnail,
-        "is_published": lp.is_published,
-        "description": lp.description,
-        "progress": lp_progress.progress if lp_progress else 0.0,
-        "updated_at": lp_progress.updated_at if lp_progress else None,
-        "modules": module_data
-    }
-
-    if hasattr(lp, 'assessment'):
-        assessment = lp.assessment
-        response["assessment"] = {
-            "id": assessment.id,
-            "name": assessment.name,
-            "description": assessment.description,
-            "total_marks": assessment.total_marks,
-            "total_questions": assessment.total_questions,
-            "total_duration": assessment.total_duration,
-            "total_qualifying_percentage": assessment.total_qualifying_percentage,
-            "exam_type": assessment.exam_type,
-            "password_exists": assessment.password_exists,
-            "tab_switches_allowed": assessment.tab_switches_allowed,
-            "no_of_tab_switches": assessment.no_of_tab_switches,
-            "is_fullscreen": assessment.is_fullscreen,
-            "shuffle": assessment.shuffle,
-            "voice_monitoring": assessment.voice_monitoring,
-            "face_proctoring": assessment.face_proctoring,
-            "electronic_monitoring": assessment.electronic_monitoring,
-            "attempt_number": assessment_attempt.attempt_number if assessment_attempt else 0,
-            "score": assessment_attempt.score if assessment_attempt else None,
-            "status": assessment_attempt.status if assessment_attempt else 'not_attempted',
-            "attempted_at": assessment_attempt.attempted_at if assessment_attempt else None,
-        }
-
-    return JsonResponse(response)
+        return JsonResponse(response)
+        
+    except Http404:
+        return JsonResponse({'error': f'Learning path with ID {id} not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': f'An error occurred: {str(e)}'}, status=500)

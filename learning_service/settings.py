@@ -75,10 +75,15 @@ WSGI_APPLICATION = 'learning_service.wsgi.application'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+     'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'learning_path_db',
+        'USER': 'username',
+        'PASSWORD': 'yourpassword',
+        'HOST': 'db',  # Important: 'db' is the service name in docker-compose
+        'PORT': '5432',
+}
+
 }
 
 
