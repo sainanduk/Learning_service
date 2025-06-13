@@ -38,6 +38,7 @@ def vendor_learning_paths_list(request):
                 'id': str(lp.id),
                 'title': lp.title,
                 'level': lp.level,
+                'certificate_url': lp.certificate_url,
                 'time': lp.time,
                 'thumbnail': lp.thumbnail,
                 'is_published': lp.is_published,
@@ -198,6 +199,10 @@ def update_learning_path_progress(request, user, lecture_id):
 
 def learning_paths_list(request, institute, batch, user):
     try:
+        # Get current page from request parameters, default to 1
+        current_page = int(request.GET.get('currentPage', 1))
+        items_per_page = 10  # You can adjust this number as needed
+
         # Get learning paths for this institute and batch
         institute_batch_mappings = InstituteBatchLearningPath.objects.filter(
             institution=institute,
@@ -219,6 +224,15 @@ def learning_paths_list(request, institute, batch, user):
             return JsonResponse({
                 'error': 'No active learning paths found for this institute and batch'
             }, status=404)
+
+        # Calculate pagination
+        total_items = learning_paths.count()
+        total_pages = (total_items + items_per_page - 1) // items_per_page
+        
+        # Apply pagination
+        start_idx = (current_page - 1) * items_per_page
+        end_idx = start_idx + items_per_page
+        learning_paths = learning_paths[start_idx:end_idx]
             
         # Get progress for these learning paths
         progress_map = {
@@ -234,6 +248,7 @@ def learning_paths_list(request, institute, batch, user):
                 "id": str(lp.id),
                 "title": lp.title,
                 "level": lp.level,
+                "certificate_url": lp.certificate_url,
                 "time": lp.time,
                 "thumbnail": lp.thumbnail,
                 "is_published": lp.is_published,
@@ -242,7 +257,18 @@ def learning_paths_list(request, institute, batch, user):
             }
             for lp in learning_paths
         ]
-        return JsonResponse(data, safe=False)
+
+        response = {
+            "data": data,
+            "pagination": {
+                "currentPage": current_page,
+                "totalPages": total_pages,
+                "totalItems": total_items,
+                "itemsPerPage": items_per_page
+            }
+        }
+        
+        return JsonResponse(response, safe=False, status=200)
         
     except Exception as e:
         return JsonResponse({
@@ -260,6 +286,10 @@ def learning_path_detail(request, id, user):
         lectures = Lecture.objects.filter(module__in=modules)
         assignments = Assignment.objects.filter(module__in=modules)
         assessments = Assessment.objects.filter(learning_path=lp)
+
+        # Get total counts
+        total_lectures = lectures.count()
+        total_assignments = assignments.count()
 
         # Ensure LearningPathProgress exists
         lp_progress, _ = LearningPathProgress.objects.get_or_create(
@@ -331,6 +361,7 @@ def learning_path_detail(request, id, user):
                     "lecture_id": str(lec.lecture_id),
                     "title": lec.title,
                     "content": lec.content,
+                    "video_url": lec.video_url,
                     "is_viewed": progress.is_viewed if progress else False,
                     "completed_at": progress.completed_at if progress else None,
                 })
@@ -366,12 +397,15 @@ def learning_path_detail(request, id, user):
             "id": str(lp.id),
             "title": lp.title,
             "level": lp.level,
+            "certificate_url": lp.certificate_url,
             "time": lp.time,
             "thumbnail": lp.thumbnail,
             "is_published": lp.is_published,
             "description": lp.description,
             "progress": lp_progress.progress if lp_progress else 0.0,
             "updated_at": lp_progress.updated_at if lp_progress else None,
+            "total_lectures": total_lectures,
+            "total_assignments": total_assignments,
             "modules": module_data
         }
 
@@ -406,3 +440,6 @@ def learning_path_detail(request, id, user):
         return JsonResponse({'error': f'Learning path with ID {id} not found'}, status=404)
     except Exception as e:
         return JsonResponse({'error': f'An error occurred: {str(e)}'}, status=500)
+
+
+

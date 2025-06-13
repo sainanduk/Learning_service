@@ -16,6 +16,7 @@ class LearningPath(models.Model):
     thumbnail = models.URLField()
     is_published = models.BooleanField(default=False)
     description = models.TextField(blank=True)
+    certificate_url = models.URLField(default='')
 
     def __str__(self):
         return self.title
@@ -41,6 +42,7 @@ class Lecture(models.Model):
     module = models.ForeignKey(Module, related_name='lectures', on_delete=models.CASCADE)
     title = models.CharField(max_length=100)
     content = models.TextField(blank=True)
+    video_url = models.URLField(max_length=500, blank=True, null=True) 
 
     def __str__(self):
         return self.title
@@ -58,7 +60,7 @@ class Assignment(models.Model):
         return self.name
 
 class Assessment(models.Model):
-    id = models.CharField(max_length=255, primary_key=True)  # long unique string
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     learning_path = models.OneToOneField(LearningPath, related_name='assessment', on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
     description = models.TextField()
