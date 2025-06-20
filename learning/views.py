@@ -6,6 +6,9 @@ from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
 from django.db.models import Q
 from django.views.decorators.csrf import csrf_exempt
+from django.core.cache import cache
+from django.conf import settings
+import logging
 
 from .models import (
     LearningPath, Module, Lecture, Assignment, Assessment, 
@@ -15,12 +18,22 @@ from .models import (
 
 from django.utils import timezone
 
+# Get logger for this module
+logger = logging.getLogger(__name__)
+
 def vendor_learning_paths_list(request):
     """
     View to list all learning paths for vendors to manage.
     This allows vendors to see all learning paths regardless of institute or batch assignments.
     """
     try:
+        # Try to get from cache first
+        cache_key = 'vendor_learning_paths'
+        cached_data = cache.get(cache_key)
+        
+        if cached_data:
+            return JsonResponse(cached_data)
+        
         # Get all learning paths
         learning_paths = LearningPath.objects.all()
         
@@ -32,7 +45,6 @@ def vendor_learning_paths_list(request):
         # For each learning path, get all institute-batch mappings
         result = []
         for lp in learning_paths:            
-            
             # Add to result
             result.append({
                 'id': str(lp.id),
@@ -45,10 +57,15 @@ def vendor_learning_paths_list(request):
                 'description': lp.description
             })
         
-        return JsonResponse({
+        response_data = {
             'learning_paths': result,
             'total': len(result)
-        })
+        }
+        
+        # Cache the response
+        cache.set(cache_key, response_data, settings.CACHE_TTL)
+        
+        return JsonResponse(response_data)
         
     except Exception as e:
         return JsonResponse({
@@ -131,6 +148,7 @@ def vendor_add_learning_path_toInstitute(request, institute, learning_path_id, b
             'error': f'An error occurred: {str(e)}'
         }, status=500)
 
+@csrf_exempt
 def update_learning_path_progress(request, user, lecture_id):
     try:
         lecture_uuid = UUID(str(lecture_id))
@@ -194,90 +212,191 @@ def update_learning_path_progress(request, user, lecture_id):
         defaults={'progress': learning_path_progress_value}
     )
 
-    return JsonResponse({'status': 'success'})
+    return JsonResponse({'status': 'success'}) 
 
 
 def learning_paths_list(request, institute, batch, user):
     try:
-        # Get current page from request parameters, default to 1
         current_page = int(request.GET.get('currentPage', 1))
-        items_per_page = 10  # You can adjust this number as needed
+        items_per_page = 10
 
-        # Get learning paths for this institute and batch
-        institute_batch_mappings = InstituteBatchLearningPath.objects.filter(
-            institution=institute,
-            batch=batch
-        )
+        cache_key = f'learning_paths_{institute}_{batch}'
+        logger.debug(f"Debug - Cache key: {cache_key}")
         
-        if not institute_batch_mappings.exists():
-            return JsonResponse({
-                'error': f'No learning paths found for institute "{institute}" and batch "{batch}"'
-            }, status=404)
+        cached_data = cache.get(cache_key)
+        logger.debug(f"Debug - Cached data found: {cached_data is not None}")
+
+        if cached_data:
+            # Cache hit: Get paginated learning path data
+            paginated_data = cached_data['data']
+            total_items = cached_data['pagination']['totalItems']
+            total_pages = cached_data['pagination']['totalPages']
+
+        else:
+            # Cache miss: Fetch from DB and cache (without progress)
+            logger.debug(f"Debug - Cache miss, fetching from database")
+            mappings = InstituteBatchLearningPath.objects.filter(
+                institution=institute,
+                batch=batch
+            )
+            if not mappings.exists():
+                return JsonResponse({'error': 'No learning paths found for this institute and batch'}, status=404)
+
+            learning_path_ids = mappings.values_list('learning_path_id', flat=True)
+            all_learning_paths = LearningPath.objects.filter(id__in=learning_path_ids)
+
+            if not all_learning_paths.exists():
+                return JsonResponse({'error': 'No active learning paths found'}, status=404)
+
+            # Convert learning paths to dict (no progress)
+            learning_paths_data = [
+                {
+                    "id": str(lp.id),
+                    "title": lp.title,
+                    "level": lp.level,
+                    "certificate_url": lp.certificate_url,
+                    "time": lp.time,
+                    "thumbnail": lp.thumbnail,
+                    "is_published": lp.is_published,
+                    "description": lp.description,
+                }
+                for lp in all_learning_paths
+            ]
+
+            # Pagination setup
+            total_items = len(learning_paths_data)
+            total_pages = (total_items + items_per_page - 1) // items_per_page
+
+            # Save all data in cache (no progress)
+            cache_data = {
+                "data": learning_paths_data,
+                "pagination": {
+                    "totalItems": total_items,
+                    "totalPages": total_pages
+                }
+            }
             
-        # Extract learning path IDs
-        learning_path_ids = institute_batch_mappings.values_list('learning_path_id', flat=True)
-        
-        # Get the actual learning paths
-        learning_paths = LearningPath.objects.filter(id__in=learning_path_ids)
-        
-        if not learning_paths.exists():
-            return JsonResponse({
-                'error': 'No active learning paths found for this institute and batch'
-            }, status=404)
+            logger.debug(f"Debug - About to set cache with TTL: {settings.CACHE_TTL}")
+            try:
+                cache.set(cache_key, cache_data, settings.CACHE_TTL)
+                logger.debug(f"Debug - Cache set successfully")
+            except Exception as cache_error:
+                logger.debug(f"Debug - Cache set failed: {cache_error}")
 
-        # Calculate pagination
-        total_items = learning_paths.count()
-        total_pages = (total_items + items_per_page - 1) // items_per_page
-        
-        # Apply pagination
+            paginated_data = learning_paths_data
+
+        # Apply pagination to cached data
         start_idx = (current_page - 1) * items_per_page
         end_idx = start_idx + items_per_page
-        learning_paths = learning_paths[start_idx:end_idx]
-            
-        # Get progress for these learning paths
+        page_data = paginated_data[start_idx:end_idx]
+
+        # Fetch progress for learning paths on this page
+        learning_path_ids = [item['id'] for item in page_data]
+        # Convert string IDs to UUID objects for the database query
+        learning_path_uuids = [UUID(lp_id) for lp_id in learning_path_ids]
+        
         progress_map = {
-            lp_progress.learning_path_id: lp_progress.progress
+            str(lp_progress.learning_path_id): lp_progress.progress
             for lp_progress in LearningPathProgress.objects.filter(
-                user_id=str(user), 
-                learning_path__in=learning_paths
+                user_id=str(user),
+                learning_path_id__in=learning_path_uuids
             )
         }
 
-        data = [
-            {
-                "id": str(lp.id),
-                "title": lp.title,
-                "level": lp.level,
-                "certificate_url": lp.certificate_url,
-                "time": lp.time,
-                "thumbnail": lp.thumbnail,
-                "is_published": lp.is_published,
-                "description": lp.description,
-                "progress": progress_map.get(lp.id, 0.0),
-            }
-            for lp in learning_paths
-        ]
+        # Debug: Print progress map to see what's being fetched
+        logger.debug(f"Debug - User: {user}")
+        logger.debug(f"Debug - Learning path IDs: {learning_path_ids}")
+        logger.debug(f"Debug - Progress map: {progress_map}")
 
-        response = {
-            "data": data,
+        # Add progress to each item
+        for item in page_data:
+            item['progress'] = progress_map.get(item['id'], 0.0)
+
+        return JsonResponse({
+            "data": page_data,
             "pagination": {
                 "currentPage": current_page,
                 "totalPages": total_pages,
                 "totalItems": total_items,
                 "itemsPerPage": items_per_page
             }
-        }
-        
-        return JsonResponse(response, safe=False, status=200)
-        
+        }, safe=False, status=200)
+
     except Exception as e:
-        return JsonResponse({
-            'error': f'An error occurred: {str(e)}'
-        }, status=500)
+        logger.debug(f"Debug - Exception occurred: {str(e)}")
+        return JsonResponse({'error': f'An error occurred: {str(e)}'}, status=500)
 
 
 def learning_path_detail(request, id, user):
     try:
+        # Try to get from cache first
+        cache_key = f'learning_path_detail_{id}'
+        logger.debug(f"Debug - Detail cache key: {cache_key}")
+        
+        cached_data = cache.get(cache_key)
+        logger.debug(f"Debug - Detail cached data found: {cached_data is not None}")
+        
+        if cached_data:
+            logger.debug(f"Debug - Using cached detail data")
+            # Get user-specific progress data from database
+            lp = get_object_or_404(LearningPath, pk=id)
+            modules = lp.modules.prefetch_related('lectures', 'assignment')
+            lectures = Lecture.objects.filter(module__in=modules)
+            assignments = Assignment.objects.filter(module__in=modules)
+            assessments = Assessment.objects.filter(learning_path=lp)
+            
+            # Get user progress from database - FIXED: Use lecture.lecture_id instead of lp.lecture_id
+            lecture_progress_map = {
+                str(lecture_progress.lecture_id): lecture_progress 
+                for lecture_progress in LectureProgress.objects.filter(user_id=str(user), lecture__in=lectures)
+            }
+            
+            # Debug: Print lecture progress map
+            logger.debug(f"Debug - User: {user}")
+            logger.debug(f"Debug - Lecture progress map: {lecture_progress_map}")
+            
+            module_progress_map = {
+                mp.module_id: mp for mp in ModuleProgress.objects.filter(user_id=str(user), module__in=modules)
+            }
+            lp_progress = LearningPathProgress.objects.filter(user_id=str(user), learning_path=lp).first()
+            assignment_attempts_map = {
+                aa.assignment_id: aa for aa in AssignmentAttempt.objects.filter(user_id=str(user), assignment__in=assignments)
+            }
+            assessment_attempt = AssessmentAttempt.objects.filter(user_id=str(user), assessment__in=assessments).order_by('-attempt_number').first()
+            
+            # Add progress to cached data
+            cached_data['progress'] = lp_progress.progress if lp_progress else 0.0
+            cached_data['updated_at'] = lp_progress.updated_at if lp_progress else None
+            
+            # Update module data with progress
+            for module in cached_data['modules']:
+                mod_prog = module_progress_map.get(module['module_id'])
+                module['progress'] = mod_prog.progress if mod_prog else 0.0
+                module['is_completed'] = mod_prog.is_completed if mod_prog else False
+                
+                # Update lecture progress
+                for lecture in module['lectures']:
+                    progress = lecture_progress_map.get(lecture['lecture_id'])
+                    lecture['is_viewed'] = progress.is_viewed if progress else False
+                    lecture['completed_at'] = progress.completed_at if progress else None
+                
+                # Update assignment progress
+                if 'assignment' in module:
+                    attempt = assignment_attempts_map.get(module['assignment']['id'])
+                    module['assignment']['status'] = attempt.status if attempt else 'not_started'
+                    module['assignment']['score'] = attempt.score if attempt else None
+                    module['assignment']['attempted_at'] = attempt.attempted_at if attempt else None
+            
+            # Update assessment progress
+            if 'assessment' in cached_data:
+                cached_data['assessment']['attempt_number'] = assessment_attempt.attempt_number if assessment_attempt else 0
+                cached_data['assessment']['score'] = assessment_attempt.score if assessment_attempt else None
+                cached_data['assessment']['status'] = assessment_attempt.status if assessment_attempt else 'not_attempted'
+                cached_data['assessment']['attempted_at'] = assessment_attempt.attempted_at if assessment_attempt else None
+            
+            return JsonResponse(cached_data)
+        
+        logger.debug(f"Debug - Cache miss for detail, fetching from database")
         # Get the learning path
         lp = get_object_or_404(LearningPath, pk=id)
 
@@ -291,58 +410,16 @@ def learning_path_detail(request, id, user):
         total_lectures = lectures.count()
         total_assignments = assignments.count()
 
-        # Ensure LearningPathProgress exists
-        lp_progress, _ = LearningPathProgress.objects.get_or_create(
-            user_id=str(user),
-            learning_path=lp,
-            defaults={'progress': 0.0}
-        )
-
-        # Ensure ModuleProgress exists for each module
-        module_progress_map = {}
-        for module in modules:
-            mp, _ = ModuleProgress.objects.get_or_create(
-                user_id=str(user),
-                module=module,
-                defaults={'progress': 0.0, 'is_completed': False}
-            )
-            module_progress_map[module.module_id] = mp
-
-        # Ensure LectureProgress exists for each lecture
-        lecture_progress_map = {}
-        for lecture in lectures:
-            lp_obj, _ = LectureProgress.objects.get_or_create(
-                user_id=str(user),
-                lecture=lecture,
-                defaults={'is_viewed': False, 'completed_at': None}
-            )
-            lecture_progress_map[lecture.lecture_id] = lp_obj
-
-        # Ensure AssignmentAttempt exists for each assignment
-        assignment_attempts_map = {}
-        for assignment in assignments:
-            aa, _ = AssignmentAttempt.objects.get_or_create(
-                user_id=str(user),
-                assignment=assignment,
-                defaults={'status': 'not_started', 'score': None}
-            )
-            assignment_attempts_map[assignment.id] = aa
-
-        # Ensure AssessmentAttempt exists for the assessment
-        assessment_attempt = None
-        if assessments.exists():
-            assessment = assessments.first()
-            assessment_attempt, _ = AssessmentAttempt.objects.get_or_create(
-                user_id=str(user),
-                assessment=assessment,
-                attempt_number=1,
-                defaults={'status': 'not_attempted', 'score': None}
-            )
-
-        # User-specific progress
+        # Get user-specific progress from database - FIXED: Use lecture.lecture_id instead of lp.lecture_id
         lecture_progress_map = {
-            lp.lecture_id: lp for lp in LectureProgress.objects.filter(user_id=str(user), lecture__in=lectures)
+            str(lecture_progress.lecture_id): lecture_progress 
+            for lecture_progress in LectureProgress.objects.filter(user_id=str(user), lecture__in=lectures)
         }
+        
+        # Debug: Print lecture progress map
+        logger.debug(f"Debug - User: {user}")
+        logger.debug(f"Debug - Lecture progress map: {lecture_progress_map}")
+        
         module_progress_map = {
             mp.module_id: mp for mp in ModuleProgress.objects.filter(user_id=str(user), module__in=modules)
         }
@@ -356,7 +433,7 @@ def learning_path_detail(request, id, user):
         for module in modules:
             lecture_data = []
             for lec in module.lectures.all():
-                progress = lecture_progress_map.get(lec.lecture_id)
+                progress = lecture_progress_map.get(str(lec.lecture_id))
                 lecture_data.append({
                     "lecture_id": str(lec.lecture_id),
                     "title": lec.title,
@@ -434,12 +511,38 @@ def learning_path_detail(request, id, user):
                 "attempted_at": assessment_attempt.attempted_at if assessment_attempt else None,
             }
 
+        # Cache the response without user-specific data
+        cache_data = response.copy()
+        cache_data.pop('progress', None)
+        cache_data.pop('updated_at', None)
+        for module in cache_data['modules']:
+            module.pop('progress', None)
+            module.pop('is_completed', None)
+            for lecture in module['lectures']:
+                lecture.pop('is_viewed', None)
+                lecture.pop('completed_at', None)
+            if 'assignment' in module:
+                module['assignment'].pop('status', None)
+                module['assignment'].pop('score', None)
+                module['assignment'].pop('attempted_at', None)
+        if 'assessment' in cache_data:
+            cache_data['assessment'].pop('attempt_number', None)
+            cache_data['assessment'].pop('score', None)
+            cache_data['assessment'].pop('status', None)
+            cache_data['assessment'].pop('attempted_at', None)
+        
+        logger.debug(f"Debug - Setting detail cache with TTL: {settings.CACHE_TTL}")
+        try:
+            cache.set(cache_key, cache_data, settings.CACHE_TTL)
+            logger.debug(f"Debug - Detail cache set successfully")
+        except Exception as cache_error:
+            logger.debug(f"Debug - Detail cache set failed: {cache_error}")
+
         return JsonResponse(response)
         
     except Http404:
         return JsonResponse({'error': f'Learning path with ID {id} not found'}, status=404)
     except Exception as e:
+        logger.debug(f"Debug - Detail exception occurred: {str(e)}")
         return JsonResponse({'error': f'An error occurred: {str(e)}'}, status=500)
-
-
 
