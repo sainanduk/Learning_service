@@ -76,18 +76,37 @@ WSGI_APPLICATION = 'learning_service.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
+# db name of aiven : pg-e26d26d
+
+# Service_url = postgres://avnadmin:AVNS_ISCkvc6fh5yuTj4F41d@pg-e26d26d-saiguna2004-2ab3.b.aivencloud.com:26721/defaultdb?sslmode=require
 
 DATABASES = {
      'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'learning_path_db',
-        'USER': 'username',
-        'PASSWORD': 'yourpassword',
-        'HOST': 'db',  # Important: 'db' is the service name in docker-compose
-        'PORT': '5432',
+        'NAME': 'defaultdb',
+        'USER': 'avnadmin',
+        'PASSWORD': 'AVNS_ISCkvc6fh5yuTj4F41d',
+        'HOST': 'pg-e26d26d-saiguna2004-2ab3.b.aivencloud.com',  
+        'PORT': '26721',
+        'OPTIONS': {
+            'sslmode': 'require',
+        },
 }
 
 }
+
+
+# DATABASES = {
+#      'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'learning_path_db',
+#         'USER': 'username',
+#         'PASSWORD': 'yourpassword',
+#         'HOST': 'db',  # Important: 'db' is the service name in docker-compose
+#         'PORT': '5432',
+# }
+
+# }
 
 
 # Password validation
@@ -164,15 +183,26 @@ CORS_ALLOW_HEADERS = [
 ]
 
 # Redis Cache Configuration
+
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": f"redis://{os.environ.get('REDIS_HOST', 'redis')}:{os.environ.get('REDIS_PORT', '6379')}/1",
+        "LOCATION": "rediss://default:AVNS_JMaOpFxv1g5TA41YSkH@valkey-2be057f7-saiguna2004-2ab3.b.aivencloud.com:26722",
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "SSL": True,  
         }
     }
 }
+# CACHES = {
+#     "default": {
+#         "BACKEND": "django_redis.cache.RedisCache",
+#         "LOCATION": f"redis://{os.environ.get('REDIS_HOST', 'redis')}:{os.environ.get('REDIS_PORT', '6379')}/1",
+#         "OPTIONS": {
+#             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+#         }
+#     }
+# }
 
 # Cache timeout in seconds (1 hour)
 CACHE_TTL = 3600

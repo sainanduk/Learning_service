@@ -546,3 +546,603 @@ def learning_path_detail(request, id, user):
         logger.debug(f"Debug - Detail exception occurred: {str(e)}")
         return JsonResponse({'error': f'An error occurred: {str(e)}'}, status=500)
 
+@csrf_exempt
+def create_learning_path_with_modules(request):
+    """
+    Create a learning path with multiple modules.
+    Expected JSON payload:
+    {
+        "title": "Learning Path Title",
+        "level": "beginner",
+        "time": "2 hours",
+        "thumbnail": "https://example.com/thumbnail.jpg",
+        "description": "Learning path description",
+        "certificate_url": "https://example.com/certificate.pdf",
+        "is_published": false,
+        "modules": [
+            {
+                "title": "Module 1",
+                "description": "Module 1 description"
+            },
+            {
+                "title": "Module 2", 
+                "description": "Module 2 description"
+            }
+        ]
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({
+            'error': 'Only POST method is allowed'
+        }, status=405)
+    
+    try:
+        import json
+        data = json.loads(request.body)
+        
+        # Validate required fields for learning path
+        required_fields = ['title', 'level', 'time', 'thumbnail']
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return JsonResponse({
+                    'error': f'Field "{field}" is required and cannot be empty'
+                }, status=400)
+        
+        # Validate title length
+        if len(data['title']) > 100:
+            return JsonResponse({
+                'error': 'Title must be 100 characters or less'
+            }, status=400)
+        
+        # Validate level
+        valid_levels = ['beginner', 'intermediate', 'advanced']
+        if data['level'].lower() not in valid_levels:
+            return JsonResponse({
+                'error': f'Level must be one of: {", ".join(valid_levels)}'
+            }, status=400)
+        
+        # Validate URL fields
+        import re
+        url_pattern = re.compile(r'^https?://')
+        if not url_pattern.match(data['thumbnail']):
+            return JsonResponse({
+                'error': 'Thumbnail must be a valid URL starting with http:// or https://'
+            }, status=400)
+        
+        if 'certificate_url' in data and data['certificate_url']:
+            if not url_pattern.match(data['certificate_url']):
+                return JsonResponse({
+                    'error': 'Certificate URL must be a valid URL starting with http:// or https://'
+                }, status=400)
+        
+        # Validate modules
+        if 'modules' not in data or not isinstance(data['modules'], list):
+            return JsonResponse({
+                'error': 'Modules field is required and must be a list'
+            }, status=400)
+        
+        if len(data['modules']) == 0:
+            return JsonResponse({
+                'error': 'At least one module is required'
+            }, status=400)
+        
+        # Validate each module
+        for i, module in enumerate(data['modules']):
+            if not isinstance(module, dict):
+                return JsonResponse({
+                    'error': f'Module {i+1} must be an object'
+                }, status=400)
+            
+            if 'title' not in module or not module['title']:
+                return JsonResponse({
+                    'error': f'Module {i+1} must have a title'
+                }, status=400)
+            
+            if len(module['title']) > 100:
+                return JsonResponse({
+                    'error': f'Module {i+1} title must be 100 characters or less'
+                }, status=400)
+        
+        # Create learning path
+        learning_path = LearningPath.objects.create(
+            title=data['title'],
+            level=data['level'].lower(),
+            time=data['time'],
+            thumbnail=data['thumbnail'],
+            description=data.get('description', ''),
+            certificate_url=data.get('certificate_url', ''),
+            is_published=data.get('is_published', False)
+        )
+        
+        # Create modules
+        created_modules = []
+        for module_data in data['modules']:
+            module = Module.objects.create(
+                learning_path=learning_path,
+                title=module_data['title'],
+                description=module_data.get('description', '')
+            )
+            created_modules.append({
+                'module_id': str(module.module_id),
+                'title': module.title,
+                'description': module.description
+            })
+        
+        return JsonResponse({
+            'message': 'Learning path and modules created successfully',
+            'learning_path': {
+                'id': str(learning_path.id),
+                'title': learning_path.title,
+                'level': learning_path.level,
+                'time': learning_path.time,
+                'thumbnail': learning_path.thumbnail,
+                'description': learning_path.description,
+                'certificate_url': learning_path.certificate_url,
+                'is_published': learning_path.is_published
+            },
+            'modules': created_modules,
+            'total_modules': len(created_modules)
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'error': 'Invalid JSON format'
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error creating learning path with modules: {str(e)}")
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
+
+@csrf_exempt
+def create_lectures_for_module(request, module_id):
+    """
+    Create lectures for a specific module.
+    Expected JSON payload:
+    {
+        "lectures": [
+            {
+                "title": "Lecture 1",
+                "content": "Lecture content here",
+                "video_url": "https://example.com/video1.mp4"
+            },
+            {
+                "title": "Lecture 2",
+                "content": "Lecture content here",
+                "video_url": "https://example.com/video2.mp4"
+            }
+        ]
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({
+            'error': 'Only POST method is allowed'
+        }, status=405)
+    
+    try:
+        # Validate module_id format
+        try:
+            module_uuid = UUID(str(module_id))
+        except ValueError:
+            return JsonResponse({
+                'error': 'Invalid module ID format'
+            }, status=400)
+        
+        # Get the module
+        try:
+            module = Module.objects.get(module_id=module_uuid)
+        except Module.DoesNotExist:
+            return JsonResponse({
+                'error': f'Module with ID {module_id} not found'
+            }, status=404)
+        
+        import json
+        data = json.loads(request.body)
+        
+        # Validate lectures field
+        if 'lectures' not in data or not isinstance(data['lectures'], list):
+            return JsonResponse({
+                'error': 'Lectures field is required and must be a list'
+            }, status=400)
+        
+        if len(data['lectures']) == 0:
+            return JsonResponse({
+                'error': 'At least one lecture is required'
+            }, status=400)
+        
+        # Validate each lecture
+        for i, lecture in enumerate(data['lectures']):
+            if not isinstance(lecture, dict):
+                return JsonResponse({
+                    'error': f'Lecture {i+1} must be an object'
+                }, status=400)
+            
+            if 'title' not in lecture or not lecture['title']:
+                return JsonResponse({
+                    'error': f'Lecture {i+1} must have a title'
+                }, status=400)
+            
+            if len(lecture['title']) > 100:
+                return JsonResponse({
+                    'error': f'Lecture {i+1} title must be 100 characters or less'
+                }, status=400)
+            
+            # Validate video_url if provided
+            if 'video_url' in lecture and lecture['video_url']:
+                import re
+                url_pattern = re.compile(r'^https?://')
+                if not url_pattern.match(lecture['video_url']):
+                    return JsonResponse({
+                        'error': f'Lecture {i+1} video URL must be a valid URL starting with http:// or https://'
+                    }, status=400)
+        
+        # Create lectures
+        created_lectures = []
+        for lecture_data in data['lectures']:
+            lecture = Lecture.objects.create(
+                module=module,
+                title=lecture_data['title'],
+                content=lecture_data.get('content', ''),
+                video_url=lecture_data.get('video_url', '')
+            )
+            created_lectures.append({
+                'lecture_id': str(lecture.lecture_id),
+                'title': lecture.title,
+                'content': lecture.content,
+                'video_url': lecture.video_url
+            })
+        
+        return JsonResponse({
+            'message': f'Lectures created successfully for module "{module.title}"',
+            'module': {
+                'module_id': str(module.module_id),
+                'title': module.title,
+                'description': module.description
+            },
+            'lectures': created_lectures,
+            'total_lectures': len(created_lectures)
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'error': 'Invalid JSON format'
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error creating lectures for module {module_id}: {str(e)}")
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
+
+@csrf_exempt
+def add_module_to_learning_path(request, learning_path_id):
+    """
+    Add a single module to an existing learning path.
+    Expected JSON payload:
+    {
+        "title": "New Module Title",
+        "description": "Module description"
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({
+            'error': 'Only POST method is allowed'
+        }, status=405)
+    
+    try:
+        # Validate learning_path_id format
+        try:
+            learning_path_uuid = UUID(str(learning_path_id))
+        except ValueError:
+            return JsonResponse({
+                'error': 'Invalid learning path ID format'
+            }, status=400)
+        
+        # Get the learning path
+        try:
+            learning_path = LearningPath.objects.get(id=learning_path_uuid)
+        except LearningPath.DoesNotExist:
+            return JsonResponse({
+                'error': f'Learning path with ID {learning_path_id} not found'
+            }, status=404)
+        
+        import json
+        data = json.loads(request.body)
+        
+        # Validate required fields
+        if 'title' not in data or not data['title']:
+            return JsonResponse({
+                'error': 'Title is required and cannot be empty'
+            }, status=400)
+        
+        if len(data['title']) > 100:
+            return JsonResponse({
+                'error': 'Title must be 100 characters or less'
+            }, status=400)
+        
+        # Create the module
+        module = Module.objects.create(
+            learning_path=learning_path,
+            title=data['title'],
+            description=data.get('description', '')
+        )
+        
+        return JsonResponse({
+            'message': f'Module added successfully to learning path "{learning_path.title}"',
+            'learning_path': {
+                'id': str(learning_path.id),
+                'title': learning_path.title
+            },
+            'module': {
+                'module_id': str(module.module_id),
+                'title': module.title,
+                'description': module.description
+            }
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'error': 'Invalid JSON format'
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error adding module to learning path {learning_path_id}: {str(e)}")
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
+
+@csrf_exempt
+def modify_module(request, module_id):
+    """
+    Modify an existing module.
+    Expected JSON payload:
+    {
+        "title": "Updated Module Title",
+        "description": "Updated module description"
+    }
+    """
+    if request.method != 'PUT':
+        return JsonResponse({
+            'error': 'Only PUT method is allowed'
+        }, status=405)
+    
+    try:
+        # Validate module_id format
+        try:
+            module_uuid = UUID(str(module_id))
+        except ValueError:
+            return JsonResponse({
+                'error': 'Invalid module ID format'
+            }, status=400)
+        
+        # Get the module
+        try:
+            module = Module.objects.get(module_id=module_uuid)
+        except Module.DoesNotExist:
+            return JsonResponse({
+                'error': f'Module with ID {module_id} not found'
+            }, status=404)
+        
+        import json
+        data = json.loads(request.body)
+        
+        # Validate title if provided
+        if 'title' in data:
+            if not data['title']:
+                return JsonResponse({
+                    'error': 'Title cannot be empty'
+                }, status=400)
+            
+            if len(data['title']) > 100:
+                return JsonResponse({
+                    'error': 'Title must be 100 characters or less'
+                }, status=400)
+            
+            module.title = data['title']
+        
+        # Update description if provided
+        if 'description' in data:
+            module.description = data['description']
+        
+        module.save()
+        
+        return JsonResponse({
+            'message': 'Module updated successfully',
+            'module': {
+                'module_id': str(module.module_id),
+                'title': module.title,
+                'description': module.description,
+                'learning_path': {
+                    'id': str(module.learning_path.id),
+                    'title': module.learning_path.title
+                }
+            }
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'error': 'Invalid JSON format'
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error modifying module {module_id}: {str(e)}")
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
+
+@csrf_exempt
+def add_lecture_to_module(request, module_id):
+    """
+    Add a single lecture to an existing module.
+    Expected JSON payload:
+    {
+        "title": "New Lecture Title",
+        "content": "Lecture content here",
+        "video_url": "https://example.com/video.mp4"
+    }
+    """
+    if request.method != 'POST':
+        return JsonResponse({
+            'error': 'Only POST method is allowed'
+        }, status=405)
+    
+    try:
+        # Validate module_id format
+        try:
+            module_uuid = UUID(str(module_id))
+        except ValueError:
+            return JsonResponse({
+                'error': 'Invalid module ID format'
+            }, status=400)
+        
+        # Get the module
+        try:
+            module = Module.objects.get(module_id=module_uuid)
+        except Module.DoesNotExist:
+            return JsonResponse({
+                'error': f'Module with ID {module_id} not found'
+            }, status=404)
+        
+        import json
+        data = json.loads(request.body)
+        
+        # Validate required fields
+        if 'title' not in data or not data['title']:
+            return JsonResponse({
+                'error': 'Title is required and cannot be empty'
+            }, status=400)
+        
+        if len(data['title']) > 100:
+            return JsonResponse({
+                'error': 'Title must be 100 characters or less'
+            }, status=400)
+        
+        # Validate video_url if provided
+        if 'video_url' in data and data['video_url']:
+            import re
+            url_pattern = re.compile(r'^https?://')
+            if not url_pattern.match(data['video_url']):
+                return JsonResponse({
+                    'error': 'Video URL must be a valid URL starting with http:// or https://'
+                }, status=400)
+        
+        # Create the lecture
+        lecture = Lecture.objects.create(
+            module=module,
+            title=data['title'],
+            content=data.get('content', ''),
+            video_url=data.get('video_url', '')
+        )
+        
+        return JsonResponse({
+            'message': f'Lecture added successfully to module "{module.title}"',
+            'module': {
+                'module_id': str(module.module_id),
+                'title': module.title
+            },
+            'lecture': {
+                'lecture_id': str(lecture.lecture_id),
+                'title': lecture.title,
+                'content': lecture.content,
+                'video_url': lecture.video_url
+            }
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'error': 'Invalid JSON format'
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error adding lecture to module {module_id}: {str(e)}")
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
+
+@csrf_exempt
+def modify_lecture(request, lecture_id):
+    """
+    Modify an existing lecture.
+    Expected JSON payload:
+    {
+        "title": "Updated Lecture Title",
+        "content": "Updated lecture content",
+        "video_url": "https://example.com/updated-video.mp4"
+    }
+    """
+    if request.method != 'PUT':
+        return JsonResponse({
+            'error': 'Only PUT method is allowed'
+        }, status=405)
+    
+    try:
+        # Validate lecture_id format
+        try:
+            lecture_uuid = UUID(str(lecture_id))
+        except ValueError:
+            return JsonResponse({
+                'error': 'Invalid lecture ID format'
+            }, status=400)
+        
+        # Get the lecture
+        try:
+            lecture = Lecture.objects.get(lecture_id=lecture_uuid)
+        except Lecture.DoesNotExist:
+            return JsonResponse({
+                'error': f'Lecture with ID {lecture_id} not found'
+            }, status=404)
+        
+        import json
+        data = json.loads(request.body)
+        
+        # Validate title if provided
+        if 'title' in data:
+            if not data['title']:
+                return JsonResponse({
+                    'error': 'Title cannot be empty'
+                }, status=400)
+            
+            if len(data['title']) > 100:
+                return JsonResponse({
+                    'error': 'Title must be 100 characters or less'
+                }, status=400)
+            
+            lecture.title = data['title']
+        
+        # Update content if provided
+        if 'content' in data:
+            lecture.content = data['content']
+        
+        # Update video_url if provided
+        if 'video_url' in data:
+            if data['video_url']:
+                import re
+                url_pattern = re.compile(r'^https?://')
+                if not url_pattern.match(data['video_url']):
+                    return JsonResponse({
+                        'error': 'Video URL must be a valid URL starting with http:// or https://'
+                    }, status=400)
+            lecture.video_url = data['video_url']
+        
+        lecture.save()
+        
+        return JsonResponse({
+            'message': 'Lecture updated successfully',
+            'lecture': {
+                'lecture_id': str(lecture.lecture_id),
+                'title': lecture.title,
+                'content': lecture.content,
+                'video_url': lecture.video_url,
+                'module': {
+                    'module_id': str(lecture.module.module_id),
+                    'title': lecture.module.title
+                }
+            }
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'error': 'Invalid JSON format'
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error modifying lecture {lecture_id}: {str(e)}")
+        return JsonResponse({
+            'error': f'An error occurred: {str(e)}'
+        }, status=500)
+
