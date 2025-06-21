@@ -171,39 +171,54 @@ def update_learning_path_progress(request, user, lecture_id):
         lecture_progress.completed_at = timezone.now()
         lecture_progress.save()
 
-    # Calculate ModuleProgress
+    # Calculate ModuleProgress - FIXED: Proper calculation and update
     lectures = module.lectures.all()
     total_lectures = lectures.count()
-    viewed_lectures = LectureProgress.objects.filter(
-        user_id=str(user),
-        lecture__in=lectures,
-        is_viewed=True
-    ).count()
-    module_progress_value = (viewed_lectures / total_lectures) * 100 if total_lectures > 0 else 0
-    is_module_completed = module_progress_value == 100
-
-    # Update or create ModuleProgress
-    module_progress, _ = ModuleProgress.objects.update_or_create(
-        user_id=str(user),
-        module=module,
-        defaults={'progress': module_progress_value, 'is_completed': is_module_completed}
-    )
-
-    # Calculate LearningPathProgress
-    modules = learning_path.modules.all()
-    total_modules = modules.count()
-    total_progress = 0
-    for mod in modules:
-        mod_lectures = mod.lectures.all()
-        mod_total_lectures = mod_lectures.count()
-        mod_viewed_lectures = LectureProgress.objects.filter(
+    
+    if total_lectures > 0:
+        viewed_lectures = LectureProgress.objects.filter(
             user_id=str(user),
-            lecture__in=mod_lectures,
+            lecture__in=lectures,
             is_viewed=True
         ).count()
-        mod_progress = (mod_viewed_lectures / mod_total_lectures) * 100 if mod_total_lectures > 0 else 0
-        total_progress += mod_progress
-    learning_path_progress_value = total_progress / total_modules if total_modules > 0 else 0
+        module_progress_value = (viewed_lectures / total_lectures) * 100
+        is_module_completed = module_progress_value == 100
+
+        # Update or create ModuleProgress
+        module_progress, _ = ModuleProgress.objects.update_or_create(
+            user_id=str(user),
+            module=module,
+            defaults={'progress': module_progress_value, 'is_completed': is_module_completed}
+        )
+    else:
+        module_progress_value = 0
+        is_module_completed = False
+
+    # Calculate LearningPathProgress - FIXED: Proper calculation
+    modules = learning_path.modules.all()
+    total_modules = modules.count()
+    
+    if total_modules > 0:
+        total_progress = 0
+        for mod in modules:
+            mod_lectures = mod.lectures.all()
+            mod_total_lectures = mod_lectures.count()
+            
+            if mod_total_lectures > 0:
+                mod_viewed_lectures = LectureProgress.objects.filter(
+                    user_id=str(user),
+                    lecture__in=mod_lectures,
+                    is_viewed=True
+                ).count()
+                mod_progress = (mod_viewed_lectures / mod_total_lectures) * 100
+            else:
+                mod_progress = 0
+            
+            total_progress += mod_progress
+        
+        learning_path_progress_value = total_progress / total_modules
+    else:
+        learning_path_progress_value = 0
 
     # Update or create LearningPathProgress
     learning_path_progress, _ = LearningPathProgress.objects.update_or_create(
@@ -212,7 +227,20 @@ def update_learning_path_progress(request, user, lecture_id):
         defaults={'progress': learning_path_progress_value}
     )
 
-    return JsonResponse({'status': 'success'}) 
+    return JsonResponse({
+        'status': 'success',
+        'lecture_progress': {
+            'is_viewed': lecture_progress.is_viewed,
+            'completed_at': lecture_progress.completed_at
+        },
+        'module_progress': {
+            'progress': module_progress_value,
+            'is_completed': is_module_completed
+        },
+        'learning_path_progress': {
+            'progress': learning_path_progress_value
+        }
+    })
 
 
 def learning_paths_list(request, institute, batch, user):
@@ -355,9 +383,12 @@ def learning_path_detail(request, id, user):
             logger.debug(f"Debug - User: {user}")
             logger.debug(f"Debug - Lecture progress map: {lecture_progress_map}")
             
+            # FIXED: Properly fetch module progress using module_id as string key
             module_progress_map = {
-                mp.module_id: mp for mp in ModuleProgress.objects.filter(user_id=str(user), module__in=modules)
+                str(mp.module_id): mp for mp in ModuleProgress.objects.filter(user_id=str(user), module__in=modules)
             }
+            logger.debug(f"Debug - Module progress map: {module_progress_map}")
+            
             lp_progress = LearningPathProgress.objects.filter(user_id=str(user), learning_path=lp).first()
             assignment_attempts_map = {
                 aa.assignment_id: aa for aa in AssignmentAttempt.objects.filter(user_id=str(user), assignment__in=assignments)
@@ -368,7 +399,7 @@ def learning_path_detail(request, id, user):
             cached_data['progress'] = lp_progress.progress if lp_progress else 0.0
             cached_data['updated_at'] = lp_progress.updated_at if lp_progress else None
             
-            # Update module data with progress
+            # Update module data with progress - FIXED: Use string module_id as key
             for module in cached_data['modules']:
                 mod_prog = module_progress_map.get(module['module_id'])
                 module['progress'] = mod_prog.progress if mod_prog else 0.0
@@ -420,9 +451,12 @@ def learning_path_detail(request, id, user):
         logger.debug(f"Debug - User: {user}")
         logger.debug(f"Debug - Lecture progress map: {lecture_progress_map}")
         
+        # FIXED: Properly fetch module progress using module_id as string key
         module_progress_map = {
-            mp.module_id: mp for mp in ModuleProgress.objects.filter(user_id=str(user), module__in=modules)
+            str(mp.module_id): mp for mp in ModuleProgress.objects.filter(user_id=str(user), module__in=modules)
         }
+        logger.debug(f"Debug - Module progress map: {module_progress_map}")
+        
         lp_progress = LearningPathProgress.objects.filter(user_id=str(user), learning_path=lp).first()
         assignment_attempts_map = {
             aa.assignment_id: aa for aa in AssignmentAttempt.objects.filter(user_id=str(user), assignment__in=assignments)
@@ -443,7 +477,7 @@ def learning_path_detail(request, id, user):
                     "completed_at": progress.completed_at if progress else None,
                 })
 
-            mod_prog = module_progress_map.get(module.module_id)
+            mod_prog = module_progress_map.get(str(module.module_id))
             mod_obj = {
                 "module_id": str(module.module_id),
                 "title": module.title,
