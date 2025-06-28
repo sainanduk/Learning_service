@@ -1,5 +1,6 @@
 # learning/models.py
 
+from datetime import timezone
 from django.db import models
 import uuid
 
@@ -102,15 +103,40 @@ class ModuleProgress(models.Model):
     class Meta:
         unique_together = ('user_id', 'module')
 
+# class LearningPathProgress(models.Model):
+#     user_id = models.CharField(max_length=255)
+#     learning_path = models.ForeignKey(LearningPath, related_name='progress', on_delete=models.CASCADE)
+#     progress = models.FloatField(default=0.0)  # percentage
+#     started_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+#     is_completed = models.BooleanField(default=False)
+#     completed_at = models.DateTimeField(null=True, blank=True)
+
+#     class Meta:
+#         unique_together = ('user_id', 'learning_path')
+
+
 class LearningPathProgress(models.Model):
     user_id = models.CharField(max_length=255)
     learning_path = models.ForeignKey(LearningPath, related_name='progress', on_delete=models.CASCADE)
-    progress = models.FloatField(default=0.0)  # percentage
+    progress = models.FloatField(default=0.0)
     started_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    is_completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ('user_id', 'learning_path')
+
+    def save(self, *args, **kwargs):
+        if self.progress == 100 and not self.is_completed:
+            self.is_completed = True
+            if not self.completed_at:
+                self.completed_at = timezone.now()
+        elif self.progress < 100:
+            self.is_completed = False
+            self.completed_at = None
+        super().save(*args, **kwargs)
 
 class AssignmentAttempt(models.Model):
     user_id = models.CharField(max_length=255)

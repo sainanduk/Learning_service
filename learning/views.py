@@ -149,32 +149,37 @@ def vendor_add_learning_path_toInstitute(request, institute, learning_path_id, b
         }, status=500)
 
 @csrf_exempt
+
 def update_learning_path_progress(request, user, lecture_id):
     try:
         lecture_uuid = UUID(str(lecture_id))
     except ValueError:
         raise Http404("Invalid lecture ID format.")
     
-    # Retrieve the lecture
     lecture = get_object_or_404(Lecture, lecture_id=lecture_id)
     module = lecture.module
     learning_path = module.learning_path
 
-    # Update or create LectureProgress
+    # Toggle or create LectureProgress
     lecture_progress, created = LectureProgress.objects.get_or_create(
         user_id=str(user),
         lecture=lecture,
         defaults={'is_viewed': True, 'completed_at': timezone.now()}
     )
+
     if not created:
-        lecture_progress.is_viewed = True
-        lecture_progress.completed_at = timezone.now()
+        if lecture_progress.is_viewed:
+            lecture_progress.is_viewed = False
+            lecture_progress.completed_at = None
+        else:
+            lecture_progress.is_viewed = True
+            lecture_progress.completed_at = timezone.now()
         lecture_progress.save()
 
-    # Calculate ModuleProgress - FIXED: Proper calculation and update
+    # Calculate ModuleProgress
     lectures = module.lectures.all()
     total_lectures = lectures.count()
-    
+
     if total_lectures > 0:
         viewed_lectures = LectureProgress.objects.filter(
             user_id=str(user),
@@ -184,8 +189,7 @@ def update_learning_path_progress(request, user, lecture_id):
         module_progress_value = (viewed_lectures / total_lectures) * 100
         is_module_completed = module_progress_value == 100
 
-        # Update or create ModuleProgress
-        module_progress, _ = ModuleProgress.objects.update_or_create(
+        ModuleProgress.objects.update_or_create(
             user_id=str(user),
             module=module,
             defaults={'progress': module_progress_value, 'is_completed': is_module_completed}
@@ -194,16 +198,16 @@ def update_learning_path_progress(request, user, lecture_id):
         module_progress_value = 0
         is_module_completed = False
 
-    # Calculate LearningPathProgress - FIXED: Proper calculation
+    # Calculate LearningPathProgress
     modules = learning_path.modules.all()
     total_modules = modules.count()
-    
+
     if total_modules > 0:
         total_progress = 0
         for mod in modules:
             mod_lectures = mod.lectures.all()
             mod_total_lectures = mod_lectures.count()
-            
+
             if mod_total_lectures > 0:
                 mod_viewed_lectures = LectureProgress.objects.filter(
                     user_id=str(user),
@@ -213,15 +217,14 @@ def update_learning_path_progress(request, user, lecture_id):
                 mod_progress = (mod_viewed_lectures / mod_total_lectures) * 100
             else:
                 mod_progress = 0
-            
+
             total_progress += mod_progress
-        
+
         learning_path_progress_value = total_progress / total_modules
     else:
         learning_path_progress_value = 0
 
-    # Update or create LearningPathProgress
-    learning_path_progress, _ = LearningPathProgress.objects.update_or_create(
+    LearningPathProgress.objects.update_or_create(
         user_id=str(user),
         learning_path=learning_path,
         defaults={'progress': learning_path_progress_value}
@@ -234,13 +237,91 @@ def update_learning_path_progress(request, user, lecture_id):
             'completed_at': lecture_progress.completed_at
         },
         'module_progress': {
-            'progress': module_progress_value,
+            'progress': int(module_progress_value),
             'is_completed': is_module_completed
         },
         'learning_path_progress': {
-            'progress': learning_path_progress_value
+            'progress': int(learning_path_progress_value)
         }
     })
+
+def certificate_list(request, institute, batch, user):
+    try:
+        cache_key = f'learning_paths_certificates_{institute}_{batch}'
+        logger.debug(f"Debug - Cache key: {cache_key}")
+
+        cached_data = cache.get(cache_key)
+        logger.debug(f"Debug - Cached data found: {cached_data is not None}")
+
+        if cached_data:
+            all_learning_paths_data = cached_data['data']
+        else:
+            logger.debug("Debug - Cache miss, fetching from database")
+            mappings = InstituteBatchLearningPath.objects.filter(
+                institution=institute,
+                batch=batch
+            )
+            if not mappings.exists():
+                return JsonResponse({'error': 'No learning paths found for this institute and batch'}, status=404)
+
+            learning_path_ids = mappings.values_list('learning_path_id', flat=True)
+            all_learning_paths = LearningPath.objects.filter(id__in=learning_path_ids)
+
+            if not all_learning_paths.exists():
+                return JsonResponse({'error': 'No active learning paths found'}, status=404)
+
+            all_learning_paths_data = [
+                {
+                    "id": str(lp.id),
+                    "title": lp.title,
+                    "certificate_url": lp.certificate_url
+                }
+                for lp in all_learning_paths
+            ]
+
+            cache_data = {
+                "data": all_learning_paths_data,
+                "pagination": {
+                    "totalItems": len(all_learning_paths_data),
+                    "totalPages": 1
+                }
+            }
+
+            try:
+                cache.set(cache_key, cache_data, settings.CACHE_TTL)
+                logger.debug("Debug - Cache set successfully")
+            except Exception as cache_error:
+                logger.debug(f"Debug - Cache set failed: {cache_error}")
+
+        learning_path_ids = [item['id'] for item in all_learning_paths_data]
+        learning_path_uuids = [UUID(lp_id) for lp_id in learning_path_ids]
+
+        progress_qs = LearningPathProgress.objects.filter(
+            user_id=str(user),
+            learning_path_id__in=learning_path_uuids
+        )
+
+        progress_map = {
+            str(p.learning_path_id): {
+                'progress': int(p.progress),
+                'certificate_issue_date': p.completed_at
+            }
+            for p in progress_qs
+        }
+
+        for item in all_learning_paths_data:
+            lp_id = item['id']
+            progress_info = progress_map.get(lp_id, {})
+            item['progress'] = progress_info.get('progress', 0)
+            item['certificate_issue_date'] = progress_info.get('certificate_issue_date')
+
+        return JsonResponse({
+            "data": all_learning_paths_data
+        }, safe=False, status=200)
+
+    except Exception as e:
+        logger.debug(f"Debug - Exception occurred: {str(e)}")
+        return JsonResponse({'error': f'An error occurred: {str(e)}'}, status=500)
 
 
 def learning_paths_list(request, institute, batch, user):
@@ -324,7 +405,7 @@ def learning_paths_list(request, institute, batch, user):
         learning_path_uuids = [UUID(lp_id) for lp_id in learning_path_ids]
         
         progress_map = {
-            str(lp_progress.learning_path_id): lp_progress.progress
+            str(lp_progress.learning_path_id): (lp_progress.progress)
             for lp_progress in LearningPathProgress.objects.filter(
                 user_id=str(user),
                 learning_path_id__in=learning_path_uuids
@@ -338,7 +419,7 @@ def learning_paths_list(request, institute, batch, user):
 
         # Add progress to each item
         for item in page_data:
-            item['progress'] = progress_map.get(item['id'], 0.0)
+            item['progress'] = int(progress_map.get(item['id'], 0.0))
 
         return JsonResponse({
             "data": page_data,
@@ -396,13 +477,13 @@ def learning_path_detail(request, id, user):
             assessment_attempt = AssessmentAttempt.objects.filter(user_id=str(user), assessment__in=assessments).order_by('-attempt_number').first()
             
             # Add progress to cached data
-            cached_data['progress'] = lp_progress.progress if lp_progress else 0.0
+            cached_data['progress'] = int(lp_progress.progress if lp_progress else 0.0)
             cached_data['updated_at'] = lp_progress.updated_at if lp_progress else None
             
             # Update module data with progress - FIXED: Use string module_id as key
             for module in cached_data['modules']:
                 mod_prog = module_progress_map.get(module['module_id'])
-                module['progress'] = mod_prog.progress if mod_prog else 0.0
+                module['progress'] = int(mod_prog.progress if mod_prog else 0.0)
                 module['is_completed'] = mod_prog.is_completed if mod_prog else False
                 
                 # Update lecture progress
